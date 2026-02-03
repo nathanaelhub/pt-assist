@@ -1,0 +1,394 @@
+# =============================================================================
+# AI Physical Therapy Assistant - Exercise Configuration
+# =============================================================================
+#
+# This file defines the exercises tracked by the PT Assistant, including:
+# - Target keypoints for angle measurement
+# - Angle thresholds for rep counting
+# - Form tolerance ranges
+#
+# YOLO11 Pose Keypoint Reference:
+# --------------------------------
+#   0: Nose           1: Left Eye       2: Right Eye
+#   3: Left Ear       4: Right Ear      5: Left Shoulder
+#   6: Right Shoulder 7: Left Elbow     8: Right Elbow
+#   9: Left Wrist    10: Right Wrist   11: Left Hip
+#  12: Right Hip     13: Left Knee     14: Right Knee
+#  15: Left Ankle    16: Right Ankle
+#
+# Keypoint Configuration:
+# -----------------------
+# Each exercise requires 3 keypoints: [point1, vertex, point2]
+# The angle is measured AT the vertex (middle point)
+#
+# Example: For knee angle, use [hip, knee, ankle]
+#          The angle is measured at the knee joint
+#
+# =============================================================================
+
+# Global settings
+settings:
+  default_model: "models/yolo11m-pose.pt"
+  confidence_threshold: 0.3    # Minimum keypoint confidence to use
+  smoothing_window: 5          # Frames for angle smoothing
+  display_panel_width: 300     # Width of metrics panel overlay
+
+# =============================================================================
+# EXERCISE DEFINITIONS
+# =============================================================================
+
+exercises:
+
+  # ---------------------------------------------------------------------------
+  # KNEE EXTENSION (Seated)
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Strengthens quadriceps, improves knee ROM after injury/surgery
+  #   Common in post-ACL reconstruction, knee replacement rehab
+  #
+  # Starting Position: Seated with knee bent at ~90 degrees
+  # Movement: Extend knee until leg is straight (~170 degrees)
+  #
+  # Why these angles matter:
+  #   - 90° flexion: Starting position, safe for most knee conditions
+  #   - 170° extension: Full extension (not hyperextension) protects joint
+  #   - Achieving full extension is critical for normal gait pattern
+  # ---------------------------------------------------------------------------
+  knee_extension:
+    display_name: "Knee Extension"
+    keypoints: [11, 13, 15]    # Left: hip-knee-ankle
+    up_angle: 170              # Extended position (leg straight)
+    down_angle: 90             # Flexed position (knee bent)
+    form_tolerance: 15         # Acceptable deviation in degrees
+    target_reps: 10
+    side: "left"
+    description: "Seated knee extension for quadriceps strengthening"
+    clinical_notes: |
+      - Ensure patient maintains contact with seat
+      - Watch for hip hiking compensation
+      - Full extension important for gait normalization
+
+  knee_extension_right:
+    display_name: "Knee Extension (Right)"
+    keypoints: [12, 14, 16]    # Right: hip-knee-ankle
+    up_angle: 170
+    down_angle: 90
+    form_tolerance: 15
+    target_reps: 10
+    side: "right"
+    description: "Right leg knee extension"
+
+  # ---------------------------------------------------------------------------
+  # SHOULDER FLEXION (Standing)
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Improves overhead reaching ability, critical for daily activities
+  #   Used in rotator cuff rehab, frozen shoulder treatment
+  #
+  # Starting Position: Arm at side (~0-20 degrees from body)
+  # Movement: Raise arm forward and up to overhead (~170 degrees)
+  #
+  # Why these angles matter:
+  #   - 0-20° rest: Natural arm hanging position
+  #   - 170° raised: Full flexion without impingement
+  #   - NOT 180° to avoid excessive stress on shoulder structures
+  #   - Functional goal: Reaching overhead shelf (requires ~150°)
+  # ---------------------------------------------------------------------------
+  shoulder_flexion:
+    display_name: "Shoulder Flexion"
+    keypoints: [11, 5, 7]      # hip-shoulder-elbow (tracks arm elevation)
+    up_angle: 170              # Arm raised overhead
+    down_angle: 20             # Arm at side
+    form_tolerance: 15
+    target_reps: 10
+    side: "left"
+    description: "Forward arm raise for shoulder mobility"
+    clinical_notes: |
+      - Maintain neutral spine (no arching back)
+      - Elbow can be slightly bent for comfort
+      - Watch for shoulder shrugging compensation
+
+  shoulder_flexion_right:
+    display_name: "Shoulder Flexion (Right)"
+    keypoints: [12, 6, 8]      # hip-shoulder-elbow (right side)
+    up_angle: 170
+    down_angle: 20
+    form_tolerance: 15
+    target_reps: 10
+    side: "right"
+    description: "Right arm forward raise"
+
+  # ---------------------------------------------------------------------------
+  # SEATED HIP FLEXION
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Strengthens hip flexors, improves ability to lift leg
+  #   Important for stair climbing, getting in/out of car
+  #
+  # Starting Position: Seated with thigh on chair (~90° hip angle)
+  # Movement: Lift knee toward chest (~120° or more)
+  #
+  # Why these angles matter:
+  #   - 90° starting: Standard seated position
+  #   - 120°+ raised: Functional hip flexion for daily tasks
+  #   - Limited ROM may indicate hip joint pathology or tight muscles
+  # ---------------------------------------------------------------------------
+  seated_hip_flexion:
+    display_name: "Seated Hip Flexion"
+    keypoints: [5, 11, 13]     # shoulder-hip-knee (measures hip angle)
+    up_angle: 120              # Knee raised toward chest
+    down_angle: 90             # Thigh parallel to ground
+    form_tolerance: 10
+    target_reps: 10
+    side: "left"
+    description: "Seated knee lift for hip flexor strengthening"
+    clinical_notes: |
+      - Keep back straight against chair
+      - Avoid leaning back to lift leg higher
+      - Control the lowering phase (eccentric)
+
+  seated_hip_flexion_right:
+    display_name: "Seated Hip Flexion (Right)"
+    keypoints: [6, 12, 14]     # shoulder-hip-knee (right)
+    up_angle: 120
+    down_angle: 90
+    form_tolerance: 10
+    target_reps: 10
+    side: "right"
+
+  # ---------------------------------------------------------------------------
+  # STANDING HIP ABDUCTION
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Strengthens gluteus medius, critical for single-leg stability
+  #   Essential for preventing falls, Trendelenburg gait correction
+  #
+  # Starting Position: Standing, legs together (~0-10° between legs)
+  # Movement: Lift leg out to side (~45° abduction)
+  #
+  # Why these angles matter:
+  #   - 0-10° start: Legs together or slight stance width
+  #   - 45° abduction: Functional range for stepping sideways
+  #   - Beyond 45° often involves trunk lean compensation
+  #   - Quality > quantity - small controlled movements preferred
+  # ---------------------------------------------------------------------------
+  hip_abduction:
+    display_name: "Hip Abduction"
+    keypoints: [12, 11, 13]    # right hip - left hip - left knee
+    up_angle: 45               # Leg abducted (out to side)
+    down_angle: 10             # Legs together
+    form_tolerance: 10
+    target_reps: 10
+    side: "left"
+    description: "Standing side leg raise for hip stability"
+    clinical_notes: |
+      - Hold onto support for balance if needed
+      - Keep trunk upright (no leaning away from moving leg)
+      - Toes pointing forward, not up
+      - Slow, controlled movement
+
+  hip_abduction_right:
+    display_name: "Hip Abduction (Right)"
+    keypoints: [11, 12, 14]    # left hip - right hip - right knee
+    up_angle: 45
+    down_angle: 10
+    form_tolerance: 10
+    target_reps: 10
+    side: "right"
+
+  # ---------------------------------------------------------------------------
+  # SQUAT
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Functional exercise for sit-to-stand, stair climbing
+  #   Strengthens quadriceps, glutes, core
+  #   Foundation movement for lower extremity rehabilitation
+  #
+  # Starting Position: Standing with knees nearly straight (~170°)
+  # Movement: Lower into squat until knees at ~90° (or as tolerated)
+  #
+  # Why these angles matter:
+  #   - 170° standing: Normal standing knee angle (slight flexion)
+  #   - 90° depth: Standard functional squat depth
+  #   - Going below 90° increases knee joint forces
+  #   - Many patients start with partial squats (45-60°) and progress
+  # ---------------------------------------------------------------------------
+  squat:
+    display_name: "Squat"
+    keypoints: [11, 13, 15]    # hip-knee-ankle (measures knee angle)
+    up_angle: 170              # Standing (nearly straight)
+    down_angle: 90             # Squat depth (90° at knee)
+    form_tolerance: 15
+    target_reps: 10
+    side: "bilateral"
+    description: "Bodyweight squat for functional leg strength"
+    clinical_notes: |
+      - Knees track over toes (not caving inward)
+      - Weight in heels, not toes
+      - Chest up, back straight
+      - Depth limited by pain or form breakdown
+      - Use chair for safety if needed (sit-to-stand)
+
+  # Partial squat for early rehab or limited mobility
+  partial_squat:
+    display_name: "Partial Squat"
+    keypoints: [11, 13, 15]
+    up_angle: 170
+    down_angle: 120            # Shallower depth for beginners
+    form_tolerance: 15
+    target_reps: 10
+    side: "bilateral"
+    description: "Mini squat for early-stage rehabilitation"
+
+  # ---------------------------------------------------------------------------
+  # PUSH-UP (Modified or Standard)
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Upper body and core strengthening
+  #   Shoulder stability, chest and triceps strength
+  #
+  # Starting Position: Arms extended (~170° at elbow)
+  # Movement: Lower chest toward ground (~90° at elbow)
+  #
+  # Why these angles matter:
+  #   - 170° up: Full arm extension (not locked hyperextension)
+  #   - 90° down: Standard depth, safe for shoulders
+  #   - Going below 90° increases shoulder stress
+  #   - Modified (knees down) reduces load by ~50%
+  # ---------------------------------------------------------------------------
+  pushup:
+    display_name: "Push-Up"
+    keypoints: [5, 7, 9]       # shoulder-elbow-wrist (left arm)
+    up_angle: 170              # Arms extended
+    down_angle: 90             # Lowered position
+    form_tolerance: 15
+    target_reps: 10
+    side: "left"
+    description: "Push-up for upper body strength"
+    clinical_notes: |
+      - Body in straight line (no sagging hips)
+      - Elbows at ~45° from body (not flared out)
+      - Control both up and down phases
+      - Modify on knees if needed
+
+  pushup_right:
+    display_name: "Push-Up (Right Arm)"
+    keypoints: [6, 8, 10]      # shoulder-elbow-wrist (right arm)
+    up_angle: 170
+    down_angle: 90
+    form_tolerance: 15
+    target_reps: 10
+    side: "right"
+
+  # ---------------------------------------------------------------------------
+  # ELBOW FLEXION (Bicep Curl)
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Strengthens biceps, important for lifting and carrying
+  #   Used in post-fracture rehab, tendon repair recovery
+  #
+  # Starting Position: Arm straight at side (~170° elbow)
+  # Movement: Bend elbow to bring hand toward shoulder (~40°)
+  #
+  # Why these angles matter:
+  #   - 170° extended: Near-full extension (not locked)
+  #   - 40° flexed: Near-full flexion
+  #   - Full ROM important for feeding, grooming tasks
+  # ---------------------------------------------------------------------------
+  elbow_flexion:
+    display_name: "Elbow Flexion"
+    keypoints: [5, 7, 9]       # shoulder-elbow-wrist
+    up_angle: 40               # Elbow bent (flexed)
+    down_angle: 170            # Elbow straight (extended)
+    form_tolerance: 15
+    target_reps: 10
+    side: "left"
+    description: "Bicep curl for elbow strength and ROM"
+    clinical_notes: |
+      - Keep upper arm stationary at side
+      - Avoid swinging or using momentum
+      - Control the lowering (eccentric) phase
+
+  elbow_flexion_right:
+    display_name: "Elbow Flexion (Right)"
+    keypoints: [6, 8, 10]
+    up_angle: 40
+    down_angle: 170
+    form_tolerance: 15
+    target_reps: 10
+    side: "right"
+
+  # ---------------------------------------------------------------------------
+  # TRUNK FLEXION (Seated Forward Bend)
+  # ---------------------------------------------------------------------------
+  # Clinical Purpose:
+  #   Spine mobility, hamstring flexibility assessment
+  #   Used cautiously in low back pain management
+  #
+  # Starting Position: Seated upright (~170° trunk angle)
+  # Movement: Bend forward reaching toward feet (~90° or as tolerated)
+  #
+  # Why these angles matter:
+  #   - Varies greatly by individual flexibility
+  #   - Focus on controlled movement, not maximum depth
+  #   - Monitor for pain or compensation patterns
+  # ---------------------------------------------------------------------------
+  trunk_flexion:
+    display_name: "Trunk Flexion"
+    keypoints: [5, 11, 13]     # shoulder-hip-knee
+    up_angle: 170              # Sitting upright
+    down_angle: 90             # Bent forward
+    form_tolerance: 20         # More tolerance due to variability
+    target_reps: 5             # Fewer reps for mobility exercise
+    side: "left"
+    description: "Seated forward bend for trunk mobility"
+    clinical_notes: |
+      - Move slowly and smoothly
+      - Stop if pain increases
+      - Breathe normally throughout
+      - Not appropriate for acute disc issues
+
+# =============================================================================
+# PRESET EXERCISE PROGRAMS
+# =============================================================================
+# These are common exercise combinations for specific conditions
+
+programs:
+  knee_rehab:
+    name: "Knee Rehabilitation"
+    description: "Basic program for post-operative or injury knee recovery"
+    exercises:
+      - knee_extension
+      - knee_extension_right
+      - partial_squat
+      - seated_hip_flexion
+      - seated_hip_flexion_right
+
+  shoulder_mobility:
+    name: "Shoulder Mobility"
+    description: "Program for improving shoulder range of motion"
+    exercises:
+      - shoulder_flexion
+      - shoulder_flexion_right
+      - pushup  # modified as needed
+
+  hip_strengthening:
+    name: "Hip Strengthening"
+    description: "Program for hip stability and strength"
+    exercises:
+      - hip_abduction
+      - hip_abduction_right
+      - squat
+      - seated_hip_flexion
+      - seated_hip_flexion_right
+
+  general_conditioning:
+    name: "General Conditioning"
+    description: "Full body maintenance program"
+    exercises:
+      - squat
+      - pushup
+      - shoulder_flexion
+      - shoulder_flexion_right
+      - hip_abduction
+      - hip_abduction_right

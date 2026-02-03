@@ -1,0 +1,92 @@
+# =============================================================================
+# AI Physical Therapy Assistant - Dependencies
+# =============================================================================
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# For GPU acceleration (NVIDIA):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# For Apple Silicon (M1/M2/M3):
+#   PyTorch with MPS support is included in the standard installation
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Core Deep Learning & Computer Vision
+# -----------------------------------------------------------------------------
+
+# Ultralytics YOLO - Main pose estimation framework
+# Includes YOLO11 models and AIGym solution
+ultralytics>=8.3.0
+
+# OpenCV - Video processing, image manipulation, visualization
+# opencv-python includes GUI support (highgui) for display windows
+opencv-python>=4.8.0
+
+# NumPy - Numerical computing for angle calculations
+numpy>=1.24.0
+
+# -----------------------------------------------------------------------------
+# Configuration & Data Export
+# -----------------------------------------------------------------------------
+
+# PyYAML - Configuration file parsing
+PyYAML>=6.0
+
+# -----------------------------------------------------------------------------
+# Optional: Enhanced Visualization
+# -----------------------------------------------------------------------------
+
+# Matplotlib - For generating charts and graphs in reports
+matplotlib>=3.7.0
+
+# Pillow - Image processing utilities
+Pillow>=10.0.0
+
+# -----------------------------------------------------------------------------
+# Optional: Data Analysis & Reporting
+# -----------------------------------------------------------------------------
+
+# Pandas - DataFrames for session data analysis (optional but recommended)
+pandas>=2.0.0
+
+# -----------------------------------------------------------------------------
+# Optional: Web Interface (for future development)
+# -----------------------------------------------------------------------------
+
+# Flask - Lightweight web server for browser-based interface
+# flask>=3.0.0
+
+# Streamlit - Quick dashboard creation (used by interfaces/app.py)
+streamlit>=1.28.0
+
+# Streamlit-webrtc - Real-time webcam streaming in browser
+streamlit-webrtc>=0.47.0
+
+# PyArrow - Required for Streamlit custom components
+pyarrow>=14.0.0
+
+# AV - Audio/video processing for streamlit-webrtc
+av>=10.0.0
+
+# -----------------------------------------------------------------------------
+# Optional: Video Export
+# -----------------------------------------------------------------------------
+
+# imageio[ffmpeg] - Additional video format support
+# imageio[ffmpeg]>=2.31.0
+
+# -----------------------------------------------------------------------------
+# Development & Testing
+# -----------------------------------------------------------------------------
+
+# pytest - Testing framework (for running tests/)
+pytest>=7.4.0
+
+# black - Code formatting
+# black>=23.0.0
+
+# flake8 - Linting
+# flake8>=6.1.0

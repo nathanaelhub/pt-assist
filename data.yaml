@@ -1,0 +1,200 @@
+# =============================================================================
+# AI Physical Therapy Assistant - Dataset Configuration
+# =============================================================================
+#
+# This file defines the dataset structure for fine-tuning YOLO to detect
+# PT-specific equipment and objects. This is OPTIONAL and only needed if you
+# want to add equipment detection on top of pose estimation.
+#
+# Use Cases for Equipment Detection:
+# ----------------------------------
+# 1. Verify patient is using correct equipment for exercise
+# 2. Track equipment position relative to body
+# 3. Detect safety concerns (e.g., resistance band stretched too far)
+# 4. Automate exercise logging based on equipment in frame
+#
+# Training a Custom Model:
+# ------------------------
+# 1. Collect images of PT equipment in various settings
+# 2. Label images using tools like Label Studio, CVAT, or Roboflow
+# 3. Organize into train/val/test splits
+# 4. Train using: yolo detect train data=data.yaml model=yolo11n.pt epochs=100
+#
+# =============================================================================
+
+# Dataset paths (relative to this file or absolute paths)
+path: ./datasets/pt_equipment    # Root directory of dataset
+train: images/train              # Training images
+val: images/val                  # Validation images
+test: images/test                # Test images (optional)
+
+# Number of classes
+nc: 12
+
+# Class names - Common PT equipment and objects
+# Note: Class indices start at 0
+names:
+  0: resistance_band_red         # Light resistance (typically 3-5 lbs)
+  1: resistance_band_yellow      # Light-medium resistance
+  2: resistance_band_green       # Medium resistance
+  3: resistance_band_blue        # Heavy resistance
+  4: resistance_band_black       # Extra heavy resistance
+  5: foam_roller                 # For self-myofascial release
+  6: exercise_ball               # Swiss/stability ball
+  7: yoga_mat                    # Exercise mat
+  8: dumbbell                    # Free weight
+  9: ankle_weight                # Cuff weight for extremities
+  10: balance_board              # Wobble board for proprioception
+  11: therapy_wedge              # Positioning wedge/bolster
+
+# =============================================================================
+# DATASET ORGANIZATION GUIDE
+# =============================================================================
+#
+# Recommended folder structure:
+#
+# datasets/
+# └── pt_equipment/
+#     ├── images/
+#     │   ├── train/
+#     │   │   ├── img_001.jpg
+#     │   │   ├── img_002.jpg
+#     │   │   └── ...
+#     │   ├── val/
+#     │   │   ├── img_101.jpg
+#     │   │   └── ...
+#     │   └── test/
+#     │       ├── img_201.jpg
+#     │       └── ...
+#     └── labels/
+#         ├── train/
+#         │   ├── img_001.txt
+#         │   ├── img_002.txt
+#         │   └── ...
+#         ├── val/
+#         │   ├── img_101.txt
+#         │   └── ...
+#         └── test/
+#             ├── img_201.txt
+#             └── ...
+#
+# =============================================================================
+# LABEL FORMAT (YOLO format)
+# =============================================================================
+#
+# Each .txt file contains one line per object:
+#   <class_id> <x_center> <y_center> <width> <height>
+#
+# All values are normalized (0.0 to 1.0) relative to image dimensions.
+#
+# Example label file (img_001.txt):
+#   0 0.45 0.62 0.15 0.08     # Red resistance band at image center
+#   5 0.78 0.85 0.22 0.10     # Foam roller at bottom right
+#
+# =============================================================================
+# DATA COLLECTION TIPS
+# =============================================================================
+#
+# For best model performance:
+#
+# 1. Variety in backgrounds:
+#    - Home settings (living room, bedroom)
+#    - Clinical settings (PT office, gym)
+#    - Various lighting conditions
+#
+# 2. Equipment perspectives:
+#    - Equipment alone on ground/table
+#    - Equipment being held by person
+#    - Equipment in use during exercise
+#    - Partially occluded views
+#
+# 3. Image quality:
+#    - Mix of high and low resolution
+#    - Some motion blur (realistic conditions)
+#    - Various distances from camera
+#
+# 4. Recommended dataset size:
+#    - Minimum: 100 images per class
+#    - Better: 500+ images per class
+#    - Include ~10-20% without any equipment (background only)
+#
+# 5. Train/Val/Test split:
+#    - 70% training
+#    - 20% validation
+#    - 10% test
+#
+# =============================================================================
+# TRAINING COMMANDS
+# =============================================================================
+#
+# Basic training:
+#   yolo detect train data=data.yaml model=yolo11n.pt epochs=100 imgsz=640
+#
+# Training with custom parameters:
+#   yolo detect train \
+#     data=data.yaml \
+#     model=yolo11s.pt \
+#     epochs=150 \
+#     imgsz=640 \
+#     batch=16 \
+#     patience=50 \
+#     device=0 \
+#     project=pt_equipment_detection \
+#     name=run1
+#
+# Resume interrupted training:
+#   yolo detect train resume=True model=path/to/last.pt
+#
+# Validate trained model:
+#   yolo detect val model=path/to/best.pt data=data.yaml
+#
+# Run inference:
+#   yolo detect predict model=path/to/best.pt source=path/to/images
+#
+# =============================================================================
+# INTEGRATION WITH POSE ESTIMATION
+# =============================================================================
+#
+# To use equipment detection alongside pose estimation:
+#
+# ```python
+# from ultralytics import YOLO
+#
+# # Load both models
+# pose_model = YOLO("models/yolo11m-pose.pt")
+# equipment_model = YOLO("path/to/equipment_model.pt")
+#
+# # Process frame with both
+# def analyze_frame(frame):
+#     # Get pose estimation
+#     pose_results = pose_model(frame)
+#
+#     # Get equipment detection
+#     equip_results = equipment_model(frame)
+#
+#     # Combine results
+#     # ... your analysis logic ...
+#
+#     return pose_results, equip_results
+# ```
+#
+# =============================================================================
+# ALTERNATIVE: USING PRE-TRAINED MODELS
+# =============================================================================
+#
+# Instead of training a custom model, you can:
+#
+# 1. Use COCO pre-trained model (detects some fitness equipment):
+#    - sports ball (class 32)
+#    - Not specific to PT equipment
+#
+# 2. Use Roboflow Universe:
+#    - Search for "resistance band", "foam roller", etc.
+#    - Many pre-labeled datasets available
+#    - https://universe.roboflow.com/
+#
+# 3. Use transfer learning from similar domains:
+#    - Gym equipment detection models
+#    - Yoga/fitness accessory models
+#
+# =============================================================================

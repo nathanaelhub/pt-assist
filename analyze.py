@@ -965,9 +965,19 @@ def analyze_webcam(exercise_name: str = "knee_extension",
     if not cap.isOpened():
         raise ValueError(f"Could not open camera {camera_id}")
 
-    # Set camera resolution (optional - adjust as needed)
+    # Optimize camera settings for better framerate
+    # Use MJPG codec for faster capture (less CPU overhead than raw)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+
+    # Set resolution (lower = faster). 720p is good balance.
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+    # Request 30 FPS from camera
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+    # Reduce buffer size to minimize latency (get most recent frame)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))

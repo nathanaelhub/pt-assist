@@ -36,6 +36,9 @@ from typing import Optional, Tuple, List, Dict, Any
 from collections import deque
 from ultralytics import YOLO
 from ultralytics.solutions import AIGym
+from src.form_assessment import FormAnalyzer
+from src.observation_logger import ObservationLogger
+from src.pta_raw_logger import PTARawLogger
 
 
 # =============================================================================
@@ -55,6 +58,18 @@ class RepMetrics:
 
 
 @dataclass
+class PartialRepMetrics:
+    """Stores metrics for a partial/incomplete repetition attempt."""
+    exercise: str
+    min_angle: float
+    max_angle: float
+    rom: float
+    duration_seconds: float
+    reason: str  # "insufficient_rom", "reversed_early", "interrupted"
+    timestamp: str
+
+
+@dataclass
 class ExerciseSession:
     """Stores complete session data for an exercise."""
     exercise_name: str
@@ -67,6 +82,7 @@ class ExerciseSession:
     avg_form_score: float = 0.0
     tempo_consistency: float = 0.0  # Standard deviation of rep durations
     rep_metrics: List[RepMetrics] = field(default_factory=list)
+    partial_rep_metrics: List[PartialRepMetrics] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
 
@@ -201,6 +217,67 @@ def get_angle_from_keypoints(keypoints: np.ndarray, indices: List[int]) -> Optio
 
 
 # =============================================================================
+# SESSION LOGGER
+# =============================================================================
+
+class SessionLogger:
+    """
+    Writes timestamped log entries to auto-numbered log files.
+
+    Files are named logfile-01.log, logfile-02.log, etc.
+    Each file is capped at MAX_LINES lines. When a file fills up,
+    the next numbered file is created automatically.
+    A header timestamp is written at the start of each file.
+    call close() (or use as context manager) to write the session end marker.
+    """
+
+    MAX_LINES = 50
+
+    def __init__(self, log_dir: str = "logs"):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.file_path = self._next_available_file()
+        self.line_count = 0
+        created_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._write_raw(f"# logfile created: {created_ts}\n")
+
+    def _next_available_file(self) -> Path:
+        """Find the next log file that either does not exist or has room."""
+        for i in range(1, 1000):
+            path = self.log_dir / f"logfile-{i:02d}.log"
+            if not path.exists():
+                return path
+        return self.log_dir / "logfile-overflow.log"
+
+    def _write_raw(self, text: str):
+        with open(self.file_path, 'a') as f:
+            f.write(text)
+        self.line_count += 1
+
+    def log(self, message: str):
+        """Write a timestamped entry, rolling to a new file if at capacity."""
+        if self.line_count >= self.MAX_LINES:
+            self.file_path = self._next_available_file()
+            self.line_count = 0
+            continued_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._write_raw(f"# continued: {continued_ts}\n")
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._write_raw(f"[{ts}] {message}\n")
+
+    def close(self, summary: str = ""):
+        """Write the session-end marker."""
+        ts = datetime.now().strftime("%H:%M:%S")
+        suffix = f" | {summary}" if summary else ""
+        self._write_raw(f"[{ts}] SESSION END{suffix}\n")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+# =============================================================================
 # EXERCISE STATE MACHINE
 # =============================================================================
 
@@ -235,7 +312,8 @@ class ExerciseTracker:
         self.fps = fps
 
         # State tracking
-        self.current_state = "neutral"  # "up", "down", "neutral"
+        self.current_state = "neutral"   # "up", "down", "idle", "neutral"
+        self.last_peak_state = "neutral" # last definitive "up" or "down" (ignores idle)
         self.rep_count = 0
 
         # Angle tracking for current rep
@@ -251,6 +329,10 @@ class ExerciseTracker:
         # Min/max for current rep
         self.current_rep_min = float('inf')
         self.current_rep_max = float('-inf')
+
+        # Partial rep detection — minimum ROM (degrees) to count as an attempt
+        self.partial_rep_min_rom = 10.0
+        self.partial_rep_pending = False  # True when user entered idle zone
 
         # Smooth angle tracking (reduce noise)
         self.angle_buffer = deque(maxlen=5)
@@ -313,33 +395,55 @@ class ExerciseTracker:
         # or high angle to low (like knee extension from bent to straight)
         ascending = up_threshold > down_threshold
 
-        previous_state = self.current_state
         feedback = ""
+        prev_state = self.current_state
 
         if ascending:
             # Exercise like shoulder flexion: starts low, goes high
             if angle >= up_threshold - tolerance:
-                self.current_state = "up"
-                if previous_state == "down":
+                if self.last_peak_state == "down":
                     feedback = "Good extension!"
+                self.current_state = "up"
+                self.last_peak_state = "up"
+                self.partial_rep_pending = False
             elif angle <= down_threshold + tolerance:
-                self.current_state = "down"
-                if previous_state == "up":
+                if self.last_peak_state == "up":
                     # Completed a rep (went up and came back down)
                     self._complete_rep()
                     feedback = f"Rep {self.rep_count} complete!"
+                elif self.partial_rep_pending and prev_state == "idle":
+                    # Returned to start without reaching opposite threshold
+                    self._record_partial_rep("reversed_early")
+                self.current_state = "down"
+                self.last_peak_state = "down"
+                self.partial_rep_pending = False
+            else:
+                # Mid-movement — neither threshold reached yet
+                self.current_state = "idle"
+                self.partial_rep_pending = True
         else:
             # Exercise like squats: starts high (standing), goes low
             if angle <= up_threshold + tolerance:
-                self.current_state = "up"
-                if previous_state == "down":
+                if self.last_peak_state == "down":
                     # Completed a rep (went down and came back up)
                     self._complete_rep()
                     feedback = f"Rep {self.rep_count} complete!"
+                elif self.partial_rep_pending and prev_state == "idle":
+                    # Returned to start without reaching opposite threshold
+                    self._record_partial_rep("reversed_early")
+                self.current_state = "up"
+                self.last_peak_state = "up"
+                self.partial_rep_pending = False
             elif angle >= down_threshold - tolerance:
-                self.current_state = "down"
-                if previous_state == "up":
+                if self.last_peak_state == "up":
                     feedback = "Good depth!"
+                self.current_state = "down"
+                self.last_peak_state = "down"
+                self.partial_rep_pending = False
+            else:
+                # Mid-movement — neither threshold reached yet
+                self.current_state = "idle"
+                self.partial_rep_pending = True
 
         # Form warnings
         warnings = self._check_form(angle)
@@ -373,6 +477,34 @@ class ExerciseTracker:
         self.rep_roms.append(rom)
 
         # Reset for next rep
+        self._reset_rep_tracking()
+
+    def _record_partial_rep(self, reason: str = "reversed_early"):
+        """Record a partial/incomplete repetition attempt."""
+        rom = self.current_rep_max - self.current_rep_min
+        if rom < self.partial_rep_min_rom:
+            # Too little movement to count even as a partial rep
+            self._reset_rep_tracking()
+            return
+
+        duration = self.frame_count_this_rep / self.fps if self.fps > 0 else 0
+
+        partial = PartialRepMetrics(
+            exercise=self.config.name,
+            min_angle=round(self.current_rep_min, 1),
+            max_angle=round(self.current_rep_max, 1),
+            rom=round(rom, 1),
+            duration_seconds=round(duration, 2),
+            reason=reason,
+            timestamp=datetime.now().isoformat(),
+        )
+        self.session.partial_rep_metrics.append(partial)
+
+        # Reset for next rep
+        self._reset_rep_tracking()
+
+    def _reset_rep_tracking(self):
+        """Reset angle/frame tracking for the next rep attempt."""
         self.angles_this_rep = []
         self.frame_count_this_rep = 0
         self.current_rep_min = float('inf')
@@ -535,7 +667,10 @@ def draw_metrics_panel(frame: np.ndarray, metrics: Dict[str, Any],
 
     # State indicator
     state = metrics.get('state', 'neutral')
-    state_color = green if state == "up" else (yellow if state == "down" else white)
+    orange = (0, 165, 255)
+    state_color = (green if state == "up" else
+                   yellow if state == "down" else
+                   orange if state == "idle" else white)
     cv2.putText(frame, f"Phase: {state.upper()}", (x, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, state_color, 2)
     y += line_height
@@ -553,9 +688,30 @@ def draw_metrics_panel(frame: np.ndarray, metrics: Dict[str, Any],
     score_color = green if form_score >= 80 else (yellow if form_score >= 60 else red)
     cv2.putText(frame, f"Form: {form_score:.0f}%", (x, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, score_color, 2)
-    y += line_height + 10
+    y += line_height
 
-    # Feedback
+    # Form status from FormAnalyzer
+    if 'form_status' in metrics:
+        status = metrics['form_status']
+        status_colors = {
+            'excellent': green, 'good': green,
+            'warning': yellow, 'poor': red, 'stop': (0, 0, 255)
+        }
+        s_color = status_colors.get(status, white)
+        cv2.putText(frame, f"Status: {status.upper()}", (x, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, s_color, 2)
+        y += 28
+
+    # Form feedback messages from FormAnalyzer
+    for msg in metrics.get('form_messages', []):
+        msg_disp = (msg[:25] + "..") if len(msg) > 27 else msg
+        cv2.putText(frame, msg_disp, (x, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, yellow, 1)
+        y += 20
+
+    y += 5
+
+    # Rep feedback
     feedback = metrics.get('feedback', '')
     if feedback:
         cv2.putText(frame, feedback, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, green, 1)
@@ -758,6 +914,14 @@ def main(video_path: str, exercise_name: str = "knee_extension",
     # Initialize tracker
     tracker = ExerciseTracker(exercise_config, fps)
 
+    # Initialize observation logger
+    obs_logger = ObservationLogger(source="video")
+    obs_logger.start_session(exercise_config.name, target_reps=exercise_config.target_reps)
+
+    # Initialize raw PTA logger
+    pta_logger = PTARawLogger(source="video")
+    pta_logger.start_session(exercise_config.name)
+
     # Setup video writer if output path specified
     writer = None
     if output_path:
@@ -765,6 +929,8 @@ def main(video_path: str, exercise_name: str = "knee_extension",
         writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
     frame_num = 0
+    prev_rep_count = 0
+    prev_partial_count = 0
 
     try:
         while True:
@@ -792,6 +958,50 @@ def main(video_path: str, exercise_name: str = "knee_extension",
 
             # Update tracker
             metrics = tracker.update(angle)
+
+            # Raw PTA log: frame-by-frame observation (throttled to every 15 frames)
+            if angle is not None and frame_num % 15 == 0:
+                pta_logger.log_observation(
+                    exercise=exercise_config.name,
+                    min_angle=exercise_config.down_angle,
+                    max_angle=exercise_config.up_angle,
+                    angle=angle,
+                    state=tracker.current_state,
+                    count=metrics['rep_count'],
+                )
+
+            # Log new reps to observation logger
+            current_reps = metrics['rep_count']
+            if current_reps > prev_rep_count:
+                rep_list = tracker.session.rep_metrics
+                if rep_list:
+                    r = rep_list[-1]
+                    obs_logger.log_rep(
+                        rep_number=r.rep_number,
+                        exercise=exercise_config.name,
+                        rom=r.rom,
+                        form_score=r.form_score,
+                        duration_seconds=r.duration_seconds,
+                        min_angle=r.min_angle,
+                        max_angle=r.max_angle,
+                    )
+                    pta_logger.log_rep_completed(exercise_config.name, current_reps)
+                prev_rep_count = current_reps
+
+            # Log partial reps to observation logger
+            current_partial_count = len(tracker.session.partial_rep_metrics)
+            if current_partial_count > prev_partial_count:
+                p = tracker.session.partial_rep_metrics[-1]
+                obs_logger.log_partial_rep(
+                    exercise=p.exercise,
+                    rom=p.rom,
+                    min_angle=p.min_angle,
+                    max_angle=p.max_angle,
+                    duration_seconds=p.duration_seconds,
+                    reason=p.reason,
+                )
+                pta_logger.log_partial_rep(p.exercise, p.rom, p.reason)
+                prev_partial_count = current_partial_count
 
             # Draw skeleton from YOLO results
             annotated_frame = results[0].plot() if results else frame.copy()
@@ -832,6 +1042,21 @@ def main(video_path: str, exercise_name: str = "knee_extension",
 
     # Finalize session
     session = tracker.finalize_session()
+
+    # Write observation log summary
+    obs_logger.end_session(
+        total_reps=session.total_reps,
+        avg_form_score=session.avg_form_score,
+        avg_rom=session.avg_rom,
+        warnings=session.warnings,
+    )
+
+    # Write raw PTA log summary
+    pta_logger.end_session(
+        total_reps=session.total_reps,
+        avg_form_score=session.avg_form_score,
+        avg_rom=session.avg_rom,
+    )
 
     print(f"\n\n{'='*60}")
     print("Session Complete!")
@@ -929,7 +1154,9 @@ def analyze_webcam(exercise_name: str = "knee_extension",
                    config_path: str = "config.yaml",
                    model_path: str = "models/yolo11m-pose.pt",
                    camera_id: int = 0,
-                   record_output: Optional[str] = None) -> ExerciseSession:
+                   record_output: Optional[str] = None,
+                   frame_skip: int = 1,
+                   imgsz: int = 320) -> ExerciseSession:
     """
     Real-time PT session monitoring using webcam.
 
@@ -999,6 +1226,29 @@ def analyze_webcam(exercise_name: str = "knee_extension",
     # Initialize tracker
     tracker = ExerciseTracker(exercise_config, fps)
 
+    # FormAnalyzer for detailed pose-based form assessment
+    base_exercise = exercise_name.replace('_right', '').replace('_left', '')
+    form_analyzer = FormAnalyzer(base_exercise)
+    frame_num = 0
+    last_keypoints = None
+    last_angle = None
+    last_assessment = None
+
+    # Session logger (auto-numbered, capped at 50 lines, timestamped)
+    logger = SessionLogger(log_dir="logs")
+    logger.log(f"SESSION START | Exercise: {exercise_config.name} | Camera: {camera_id} | imgsz: {imgsz} | skip: {frame_skip}")
+    prev_rep_count = 0
+    prev_partial_count = 0
+    last_form_log_frame = -999  # throttle form event logging to every ~2 seconds
+
+    # Structured observation logger
+    obs_logger = ObservationLogger(source="webcam")
+    obs_logger.start_session(exercise_config.name, target_reps=exercise_config.target_reps)
+
+    # Raw PTA logger
+    pta_logger = PTARawLogger(source="webcam")
+    pta_logger.start_session(exercise_config.name)
+
     # Setup recording
     writer = None
     if record_output:
@@ -1015,29 +1265,110 @@ def analyze_webcam(exercise_name: str = "knee_extension",
                     print("Failed to grab frame")
                     break
 
-                # Run pose estimation
-                results = model(frame, verbose=False)
+                frame_num += 1
+                run_inference = (frame_num % frame_skip == 0) or (last_keypoints is None)
 
-                # Extract keypoints
-                keypoints = None
-                if results and len(results) > 0 and results[0].keypoints is not None:
-                    if len(results[0].keypoints) > 0:
-                        keypoints = results[0].keypoints.data[0].cpu().numpy()
+                if run_inference:
+                    # Run pose estimation at reduced image size for speed
+                    results = model(frame, imgsz=imgsz, verbose=False)
 
-                # Calculate angle
-                angle = get_angle_from_keypoints(keypoints, exercise_config.keypoints) if keypoints is not None else None
+                    # Extract keypoints
+                    keypoints = None
+                    if results and len(results) > 0 and results[0].keypoints is not None:
+                        if len(results[0].keypoints) > 0:
+                            keypoints = results[0].keypoints.data[0].cpu().numpy()
+
+                    last_keypoints = keypoints
+                    angle = get_angle_from_keypoints(keypoints, exercise_config.keypoints) if keypoints is not None else None
+                    last_angle = angle
+
+                    # Run form analysis on detected keypoints
+                    if keypoints is not None:
+                        last_assessment = form_analyzer.analyze_frame(keypoints, frame_num)
+
+                    # Draw skeleton from YOLO results
+                    annotated_frame = results[0].plot() if results else frame.copy()
+                else:
+                    # Skipped frame — use current raw frame, reuse last keypoints/angle
+                    keypoints = last_keypoints
+                    angle = last_angle
+                    annotated_frame = frame.copy()
+
+                # Always draw angle visualization using last known data
+                if last_keypoints is not None and last_angle is not None:
+                    annotated_frame = draw_angle_visualization(
+                        annotated_frame, last_keypoints, exercise_config.keypoints, last_angle
+                    )
 
                 # Update tracker
                 metrics = tracker.update(angle)
 
-                # Draw skeleton
-                annotated_frame = results[0].plot() if results else frame.copy()
-
-                # Draw angle visualization
-                if keypoints is not None and angle is not None:
-                    annotated_frame = draw_angle_visualization(
-                        annotated_frame, keypoints, exercise_config.keypoints, angle
+                # Raw PTA log: frame-by-frame observation (throttled to every 15 frames)
+                if angle is not None and frame_num % 15 == 0:
+                    pta_logger.log_observation(
+                        exercise=exercise_config.name,
+                        min_angle=exercise_config.down_angle,
+                        max_angle=exercise_config.up_angle,
+                        angle=angle,
+                        state=tracker.current_state,
+                        count=metrics['rep_count'],
                     )
+
+                # Attach form assessment data to metrics dict
+                if last_assessment is not None:
+                    metrics['form_status'] = last_assessment.status.value
+                    metrics['form_messages'] = [f.message for f in last_assessment.feedback_messages[:2]]
+
+                # Log new rep completions
+                current_reps = metrics['rep_count']
+                if current_reps > prev_rep_count:
+                    rep_list = tracker.session.rep_metrics
+                    if rep_list:
+                        r = rep_list[-1]
+                        logger.log(
+                            f"REP {r.rep_number} | ROM: {r.rom:.1f}° | "
+                            f"Form: {r.form_score:.0f}% | Duration: {r.duration_seconds:.1f}s | "
+                            f"Angle: {r.min_angle:.0f}°-{r.max_angle:.0f}°"
+                        )
+                        obs_logger.log_rep(
+                            rep_number=r.rep_number,
+                            exercise=exercise_config.name,
+                            rom=r.rom,
+                            form_score=r.form_score,
+                            duration_seconds=r.duration_seconds,
+                            min_angle=r.min_angle,
+                            max_angle=r.max_angle,
+                        )
+                        pta_logger.log_rep_completed(exercise_config.name, current_reps)
+                    prev_rep_count = current_reps
+
+                # Log partial reps
+                current_partial_count = len(tracker.session.partial_rep_metrics)
+                if current_partial_count > prev_partial_count:
+                    p = tracker.session.partial_rep_metrics[-1]
+                    logger.log(
+                        f"PARTIAL REP | ROM: {p.rom:.1f}° | "
+                        f"Angle: {p.min_angle:.0f}°-{p.max_angle:.0f}° | "
+                        f"Reason: {p.reason}"
+                    )
+                    obs_logger.log_partial_rep(
+                        exercise=p.exercise,
+                        rom=p.rom,
+                        min_angle=p.min_angle,
+                        max_angle=p.max_angle,
+                        duration_seconds=p.duration_seconds,
+                        reason=p.reason,
+                    )
+                    pta_logger.log_partial_rep(p.exercise, p.rom, p.reason)
+                    prev_partial_count = current_partial_count
+
+                # Log form warnings (throttled to once every ~2 s @ 30 fps)
+                if (last_assessment is not None and
+                        last_assessment.status.value in ('warning', 'poor', 'stop') and
+                        frame_num - last_form_log_frame >= 60):
+                    msgs = [f.message for f in last_assessment.feedback_messages[:1]]
+                    logger.log(f"FORM {last_assessment.status.value.upper()} | {' | '.join(msgs)}")
+                    last_form_log_frame = frame_num
 
                 # Draw metrics panel
                 annotated_frame = draw_metrics_panel(annotated_frame, metrics)
@@ -1066,17 +1397,57 @@ def analyze_webcam(exercise_name: str = "knee_extension",
             if key == ord('q'):
                 break
             elif key == ord('r'):
-                # Reset tracker
+                # Log interrupted partial rep if mid-movement
+                tracker._record_partial_rep("interrupted")
+                if len(tracker.session.partial_rep_metrics) > prev_partial_count:
+                    p = tracker.session.partial_rep_metrics[-1]
+                    obs_logger.log_partial_rep(
+                        exercise=p.exercise, rom=p.rom,
+                        min_angle=p.min_angle, max_angle=p.max_angle,
+                        duration_seconds=p.duration_seconds, reason=p.reason,
+                    )
+                    pta_logger.log_partial_rep(p.exercise, p.rom, p.reason)
+                # Reset tracker and form analyzer
+                obs_logger.log_reset(exercise_config.name, tracker.rep_count)
+                pta_logger.log_reset(exercise_config.name, tracker.rep_count)
+                logger.log(f"RESET | Reps cleared at count={tracker.rep_count}")
                 tracker = ExerciseTracker(exercise_config, fps)
+                form_analyzer.reset()
+                last_keypoints = None
+                last_angle = None
+                last_assessment = None
+                prev_rep_count = 0
+                prev_partial_count = 0
                 print("Rep counter reset")
             elif key == ord('p'):
                 paused = not paused
                 print("Paused" if paused else "Resumed")
             elif key == ord('n'):
+                # Log interrupted partial rep if mid-movement
+                tracker._record_partial_rep("interrupted")
+                if len(tracker.session.partial_rep_metrics) > prev_partial_count:
+                    p = tracker.session.partial_rep_metrics[-1]
+                    obs_logger.log_partial_rep(
+                        exercise=p.exercise, rom=p.rom,
+                        min_angle=p.min_angle, max_angle=p.max_angle,
+                        duration_seconds=p.duration_seconds, reason=p.reason,
+                    )
+                    pta_logger.log_partial_rep(p.exercise, p.rom, p.reason)
                 # Switch to next exercise
+                prev_name = exercise_config.name
                 current_exercise_idx = (current_exercise_idx + 1) % len(exercise_names)
                 exercise_config = exercises[exercise_names[current_exercise_idx]]
+                obs_logger.log_exercise_change(prev_name, exercise_config.name)
+                pta_logger.log_exercise_change(prev_name, exercise_config.name)
+                logger.log(f"SWITCH | {prev_name} → {exercise_config.name}")
                 tracker = ExerciseTracker(exercise_config, fps)
+                base_exercise = exercise_names[current_exercise_idx].replace('_right', '').replace('_left', '')
+                form_analyzer = FormAnalyzer(base_exercise)
+                last_keypoints = None
+                last_angle = None
+                last_assessment = None
+                prev_rep_count = 0
+                prev_partial_count = 0
                 print(f"Switched to: {exercise_config.name}")
             elif key == ord('s'):
                 # Save current frame
@@ -1091,7 +1462,24 @@ def analyze_webcam(exercise_name: str = "knee_extension",
             writer.release()
         cv2.destroyAllWindows()
 
-    return tracker.finalize_session()
+    session = tracker.finalize_session()
+    logger.close(
+        f"Total Reps: {session.total_reps} | "
+        f"Avg Form: {session.avg_form_score:.0f}% | "
+        f"Avg ROM: {session.avg_rom:.1f}°"
+    )
+    obs_logger.end_session(
+        total_reps=session.total_reps,
+        avg_form_score=session.avg_form_score,
+        avg_rom=session.avg_rom,
+        warnings=session.warnings,
+    )
+    pta_logger.end_session(
+        total_reps=session.total_reps,
+        avg_form_score=session.avg_form_score,
+        avg_rom=session.avg_rom,
+    )
+    return session
 
 
 def generate_session_report(session: ExerciseSession,
@@ -1323,6 +1711,10 @@ Examples:
     webcam_parser.add_argument("--model", "-m", default="models/yolo11m-pose.pt", help="YOLO model")
     webcam_parser.add_argument("--camera", type=int, default=0, help="Camera ID")
     webcam_parser.add_argument("--record", "-r", help="Record output to file")
+    webcam_parser.add_argument("--skip-frames", type=int, default=1,
+                               help="Run YOLO every Nth frame (1=all, 2=every other). Higher=faster but less smooth.")
+    webcam_parser.add_argument("--imgsz", type=int, default=320,
+                               help="YOLO inference image size (320=fast, 640=accurate). Default 320.")
 
     # Image mode
     image_parser = subparsers.add_parser("image", help="Analyze single image")
@@ -1360,7 +1752,9 @@ Examples:
             config_path=args.config,
             model_path=args.model,
             camera_id=args.camera,
-            record_output=args.record
+            record_output=args.record,
+            frame_skip=args.skip_frames,
+            imgsz=args.imgsz
         )
         generate_session_report(session)
 

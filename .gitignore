@@ -47,6 +47,9 @@ models/*.onnx
 # User data and outputs
 sessions/
 output/
+observation_logs/
+pta_logs/
+logs/
 *.mp4
 *.avi
 *.mov

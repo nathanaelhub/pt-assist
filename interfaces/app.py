@@ -30,6 +30,7 @@ from pathlib import Path
 from datetime import datetime
 import sys
 import av
+import pandas as pd
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -40,6 +41,25 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 # Import YOLO and our utilities
 from ultralytics import YOLO
 from src.utils import get_angle_from_keypoints, extract_keypoint, calculate_angle
+
+# Import core analysis engine for real video processing
+from analyze import main as analyze_video, generate_session_report
+
+# Import observation logger helpers
+from src.observation_logger import list_observation_logs, load_observation_log
+
+# Import Smart PT Summary generator
+from src.session_summary import generate_session_summary
+
+# Exercise name → config key mapping
+EXERCISE_KEY_MAP = {
+    "Knee Extension": "knee_extension",
+    "Shoulder Flexion": "shoulder_flexion",
+    "Squat": "squat",
+    "Hip Abduction": "hip_abduction",
+    "Push-up": "pushup",
+    "Elbow Flexion": "elbow_flexion",
+}
 
 # Page configuration
 st.set_page_config(
@@ -266,6 +286,9 @@ def render_sidebar():
             'home': '🏠 Dashboard',
             'live': '📹 Live Session',
             'video': '🎬 Video Analysis',
+            'pt_summary': '🩺 PT Summary',
+            'obs_logs': '🔬 Observation Logs',
+            'logs': '📋 Session Logs',
             'progress': '📊 Progress Report',
             'learn': '📚 How It Works'
         }
@@ -299,17 +322,36 @@ def page_home():
     st.markdown('<p class="sub-header">Intelligent exercise monitoring powered by computer vision</p>',
                 unsafe_allow_html=True)
 
-    # Quick stats
+    # Quick stats — pull real data from observation logs
     col1, col2, col3, col4 = st.columns(4)
 
+    obs_log_files = list_observation_logs()
+    total_sessions = len(obs_log_files)
+    total_reps_all = 0
+    form_scores_all = []
+    rom_all = []
+    for lf in obs_log_files:
+        try:
+            ld = load_observation_log(str(lf))
+            s = ld.get("summary", {})
+            total_reps_all += s.get("total_reps", 0)
+            if s.get("avg_form_score"):
+                form_scores_all.append(s["avg_form_score"])
+            if s.get("avg_rom"):
+                rom_all.append(s["avg_rom"])
+        except Exception:
+            pass
+    overall_form = f"{sum(form_scores_all)/len(form_scores_all):.0f}%" if form_scores_all else "N/A"
+    overall_rom = f"{sum(rom_all)/len(rom_all):.1f}°" if rom_all else "N/A"
+
     with col1:
-        st.metric("Sessions This Week", "5", "+2")
+        st.metric("Observation Sessions", total_sessions)
     with col2:
-        st.metric("Total Reps", "247", "+34")
+        st.metric("Total Reps Logged", total_reps_all)
     with col3:
-        st.metric("Avg Form Score", "82%", "+5%")
+        st.metric("Avg Form Score", overall_form)
     with col4:
-        st.metric("ROM Improvement", "+8°", "vs last week")
+        st.metric("Avg ROM", overall_rom)
 
     st.markdown("---")
 
@@ -332,10 +374,10 @@ def page_home():
             st.rerun()
 
     with col3:
-        st.markdown("#### 📊 View Progress")
-        st.write("Track your improvement over time")
-        if st.button("View Reports", key="view_reports"):
-            st.session_state.current_page = 'progress'
+        st.markdown("#### 🔬 Observation Logs")
+        st.write("Review per-rep event logs from past sessions")
+        if st.button("View Logs", key="view_obs_logs"):
+            st.session_state.current_page = 'obs_logs'
             st.rerun()
 
     st.markdown("---")
@@ -532,73 +574,105 @@ def page_video_analysis():
 
             exercise = st.selectbox(
                 "Exercise Type",
-                ["Knee Extension", "Shoulder Flexion", "Squat", "Hip Abduction"]
+                list(EXERCISE_KEY_MAP.keys())
             )
 
-            st.checkbox("Generate annotated video", value=True, key="gen_annotated")
-            st.checkbox("Export detailed report", value=True, key="gen_report")
+            gen_annotated = st.checkbox("Generate annotated video", value=True, key="gen_annotated")
+            gen_report = st.checkbox("Export detailed report", value=True, key="gen_report")
 
             if st.button("🔍 Analyze Video", type="primary"):
-                with st.spinner("Analyzing video..."):
-                    # Progress bar
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                exercise_key = EXERCISE_KEY_MAP.get(exercise, "knee_extension")
+                base_dir = Path(__file__).parent.parent
+                config_path = str(base_dir / "config.yaml")
+                model_path = str(base_dir / "models" / "yolo11m-pose.pt")
 
-                    # Simulate analysis (would call actual analysis in production)
-                    for i in range(100):
-                        time.sleep(0.05)
-                        progress_bar.progress(i + 1)
-                        status_text.text(f"Processing frame {i+1}/100...")
+                annotated_path = None
+                if gen_annotated:
+                    annotated_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                    annotated_path = annotated_tmp.name
+                    annotated_tmp.close()
 
-                    status_text.text("Analysis complete!")
+                with st.spinner("Running YOLO pose analysis — this may take a minute..."):
+                    try:
+                        session = analyze_video(
+                            video_path=video_path,
+                            exercise_name=exercise_key,
+                            output_path=annotated_path,
+                            config_path=config_path,
+                            model_path=model_path,
+                            show_video=False
+                        )
+                        st.success("✅ Video analysis complete!")
+                    except Exception as e:
+                        st.error(f"Analysis failed: {e}")
+                        session = None
 
-                st.success("✅ Video analysis complete!")
+                if session is not None:
+                    st.markdown("---")
+                    st.markdown("### Analysis Results")
 
-                # Show results
-                st.markdown("---")
-                st.markdown("### Analysis Results")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Reps", f"{session.total_reps}/{session.target_reps}")
+                    with col2:
+                        st.metric("Avg Form Score", f"{session.avg_form_score:.1f}%")
+                    with col3:
+                        st.metric("Avg ROM", f"{session.avg_rom:.1f}°")
+                    with col4:
+                        st.metric("Max ROM", f"{session.max_rom:.1f}°")
 
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Reps", "12")
-                with col2:
-                    st.metric("Avg Form Score", "78%")
-                with col3:
-                    st.metric("ROM Range", "85°")
-                with col4:
-                    st.metric("Duration", "2:34")
+                    # Annotated video playback
+                    if annotated_path and Path(annotated_path).exists():
+                        st.markdown("#### Annotated Video")
+                        st.video(annotated_path)
 
-                # Rep-by-rep breakdown
-                st.markdown("#### Rep Analysis")
-                rep_data = [
-                    {"rep": 1, "rom": 82, "form": 85, "time": 2.1},
-                    {"rep": 2, "rom": 85, "form": 82, "time": 2.0},
-                    {"rep": 3, "rom": 80, "form": 78, "time": 2.3},
-                    {"rep": 4, "rom": 78, "form": 75, "time": 2.5},
-                ]
+                    # Rep-by-rep breakdown
+                    if session.rep_metrics:
+                        import pandas as pd
+                        from dataclasses import asdict
+                        st.markdown("#### Rep-by-Rep Breakdown")
+                        df = pd.DataFrame([asdict(r) for r in session.rep_metrics])
+                        display_cols = ["rep_number", "min_angle", "max_angle", "rom", "duration_seconds", "form_score"]
+                        st.dataframe(df[display_cols].rename(columns={
+                            "rep_number": "Rep", "min_angle": "Min °", "max_angle": "Max °",
+                            "rom": "ROM °", "duration_seconds": "Duration (s)", "form_score": "Form %"
+                        }), use_container_width=True)
 
-                import pandas as pd
-                df = pd.DataFrame(rep_data)
-                st.dataframe(df, use_container_width=True)
+                    # Download options
+                    st.markdown("#### Download Results")
+                    dl_col1, dl_col2 = st.columns(2)
 
-                # Download options
-                st.markdown("#### Download Results")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.download_button(
-                        "📄 Download Report (JSON)",
-                        json.dumps({"reps": rep_data}, indent=2),
-                        file_name="analysis_report.json",
-                        mime="application/json"
-                    )
-                with col2:
-                    st.download_button(
-                        "🎬 Download Annotated Video",
-                        b"video_placeholder",  # Would be actual video in production
-                        file_name="annotated_video.mp4",
-                        mime="video/mp4",
-                        disabled=True  # Disabled for demo
-                    )
+                    if gen_report:
+                        report_data = {
+                            "exercise": session.exercise_name,
+                            "total_reps": session.total_reps,
+                            "target_reps": session.target_reps,
+                            "avg_rom": session.avg_rom,
+                            "max_rom": session.max_rom,
+                            "avg_form_score": session.avg_form_score,
+                            "tempo_consistency": session.tempo_consistency,
+                        }
+                        if session.rep_metrics:
+                            from dataclasses import asdict
+                            report_data["reps"] = [asdict(r) for r in session.rep_metrics]
+                        with dl_col1:
+                            st.download_button(
+                                "📄 Download Report (JSON)",
+                                json.dumps(report_data, indent=2),
+                                file_name="analysis_report.json",
+                                mime="application/json"
+                            )
+
+                    if annotated_path and Path(annotated_path).exists():
+                        with open(annotated_path, "rb") as vf:
+                            video_bytes = vf.read()
+                        with dl_col2:
+                            st.download_button(
+                                "🎬 Download Annotated Video",
+                                video_bytes,
+                                file_name="annotated_exercise.mp4",
+                                mime="video/mp4"
+                            )
 
     else:
         st.info("👆 Upload a video file to begin analysis")
@@ -607,6 +681,766 @@ def page_video_analysis():
         st.markdown("### Example Analysis")
         st.image("https://via.placeholder.com/800x400?text=Example+Analysis+Screenshot",
                 use_container_width=True)
+
+
+# =============================================================================
+# PAGE: PT SUMMARY (clinical smart summary of a session log)
+# =============================================================================
+
+def page_pt_summary():
+    """Render the Smart PT Summary clinical dashboard."""
+
+    # ── CSS ──────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .pts-header-card {
+        background: linear-gradient(135deg, #0d2137 0%, #102a47 100%);
+        border: 1px solid #1e4a7a;
+        border-radius: 14px;
+        padding: 1.4rem 1.6rem;
+        margin-bottom: 1.2rem;
+    }
+    .pts-metric-row {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-top: 0.8rem;
+    }
+    .pts-metric-box {
+        background: rgba(255,255,255,0.06);
+        border-radius: 10px;
+        padding: 0.6rem 1rem;
+        min-width: 120px;
+        text-align: center;
+    }
+    .pts-metric-label {
+        font-size: 0.7rem;
+        color: #8aa4c0;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .pts-metric-value {
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #e8f4ff;
+    }
+    .pts-section-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #8aa4c0;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 1.2rem 0 0.5rem 0;
+    }
+    .rep-table th {
+        background: #1a2a3a !important;
+        color: #8aa4c0 !important;
+        font-size: 0.75rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("## 🩺 PT Summary")
+    st.caption("Clinical smart summary — select a session log and generate an instant report.")
+
+    # ── Session selector ──────────────────────────────────────────────────────
+    log_files = list_observation_logs()
+
+    if not log_files:
+        st.warning("No observation logs found. Run a video or live session analysis first.")
+        return
+
+    # Build display labels: "session_2026-03-23_234320 (2026-03-23)"
+    def _label(f):
+        try:
+            d = load_observation_log(str(f))
+            src = d.get("source", "")
+            ex = d.get("initial_exercise", "")
+            start = d.get("start_time", "")[:16].replace("T", " ")
+            return f"{f.stem}  |  {src}  |  {ex}  |  {start}"
+        except Exception:
+            return f.name
+
+    labels = [_label(f) for f in log_files]
+    file_map = {label: f for label, f in zip(labels, log_files)}
+
+    selected_label = st.selectbox(
+        "Select session log",
+        options=labels,
+        index=0,
+        key="pts_file_select",
+    )
+    selected_file = file_map[selected_label]
+
+    generate_btn = st.button("🔍 Generate PT Summary", type="primary", use_container_width=True)
+
+    if not generate_btn and "pts_summary_data" not in st.session_state:
+        st.info("Select a session log above and click **Generate PT Summary** to begin.")
+        return
+
+    # ── Load & analyse ────────────────────────────────────────────────────────
+    if generate_btn:
+        with st.spinner("Analysing session…"):
+            try:
+                data = load_observation_log(str(selected_file))
+                summary = generate_session_summary(data)
+                st.session_state["pts_summary_data"] = summary
+                st.session_state["pts_log_data"] = data
+                st.session_state["pts_selected_file"] = selected_file.name
+            except Exception as exc:
+                st.error(f"Failed to load or analyse log: {exc}")
+                return
+    else:
+        summary = st.session_state.get("pts_summary_data")
+        data = st.session_state.get("pts_log_data")
+        if not summary or not data:
+            st.info("Select a session log above and click **Generate PT Summary** to begin.")
+            return
+
+    metrics = summary["metrics"]
+    flags = summary["key_flags"]
+
+    # ── Header card ───────────────────────────────────────────────────────────
+    start_raw = metrics.get("start_time", "")
+    start_display = start_raw[:16].replace("T", "  ") if start_raw else "—"
+    source = metrics.get("source", "—").capitalize()
+    dur_sec = metrics.get("session_duration_seconds", 0)
+    dur_min, dur_s = divmod(int(dur_sec), 60)
+    dur_label = f"{dur_min}:{dur_s:02d}" if dur_min else f"{dur_s}s"
+    exercises = metrics.get("exercises_performed", [])
+    ex_label = " → ".join(exercises) if exercises else "—"
+
+    st.markdown(f"""
+    <div class="pts-header-card">
+        <div style="font-size:1.1rem; font-weight:700; color:#e8f4ff; margin-bottom:0.2rem;">
+            📋 Session Report — {st.session_state.get('pts_selected_file', '')}
+        </div>
+        <div style="font-size:0.82rem; color:#8aa4c0;">
+            {start_display} &nbsp;·&nbsp; {source} &nbsp;·&nbsp; {ex_label}
+        </div>
+        <div class="pts-metric-row">
+            <div class="pts-metric-box">
+                <div class="pts-metric-label">Total Reps</div>
+                <div class="pts-metric-value">{metrics.get('total_reps', 0)}</div>
+            </div>
+            <div class="pts-metric-box">
+                <div class="pts-metric-label">Duration</div>
+                <div class="pts-metric-value">{dur_label}</div>
+            </div>
+            <div class="pts-metric-box">
+                <div class="pts-metric-label">Avg Form</div>
+                <div class="pts-metric-value">{metrics.get('avg_form_score', 0):.0f}%</div>
+            </div>
+            <div class="pts-metric-box">
+                <div class="pts-metric-label">Avg ROM</div>
+                <div class="pts-metric-value">{metrics.get('avg_rom', 0):.1f}°</div>
+            </div>
+            <div class="pts-metric-box">
+                <div class="pts-metric-label">Rest Periods</div>
+                <div class="pts-metric-value">{metrics.get('rest_period_count', 0)}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Reps per exercise breakdown ───────────────────────────────────────────
+    rpe = metrics.get("reps_per_exercise", {})
+    if rpe:
+        cols = st.columns(len(rpe))
+        for col, (ex, cnt) in zip(cols, rpe.items()):
+            col.metric(ex, f"{cnt} reps")
+
+    st.markdown("---")
+
+    # ── Key Observations ──────────────────────────────────────────────────────
+    st.markdown('<div class="pts-section-title">🔎 Key Observations</div>', unsafe_allow_html=True)
+
+    if not flags:
+        st.success("No significant observations — session within normal parameters.")
+    else:
+        for flag in flags:
+            sev = flag.get("severity", "info")
+            msg = flag.get("message", "")
+            cat = flag.get("category", "")
+            # Skip rest_period flags here — they are minor and clutter the view
+            if cat == "rest_period":
+                continue
+            if sev == "warning":
+                st.warning(msg)
+            elif sev == "success":
+                st.success(msg)
+            elif sev == "error":
+                st.error(msg)
+            else:
+                st.info(msg)
+
+    st.markdown("---")
+
+    # ── Timeline chart: form score over reps ─────────────────────────────────
+    events = data.get("events", [])
+    rep_events = [e for e in events if e.get("type") == "rep"]
+
+    if rep_events:
+        import pandas as pd
+
+        chart_rows = []
+        for i, rep in enumerate(rep_events):
+            chart_rows.append({
+                "Rep #": i + 1,
+                "Exercise": rep.get("exercise", "?"),
+                "Form Score (%)": rep.get("form_score", 0),
+                "ROM (°)": rep.get("rom", 0),
+                "Duration (s)": rep.get("duration_seconds", 0),
+                "rep_number": rep.get("rep_number", i + 1),
+                "timestamp": rep.get("timestamp", ""),
+            })
+        df_chart = pd.DataFrame(chart_rows)
+
+        st.markdown('<div class="pts-section-title">📈 Form Score Timeline</div>', unsafe_allow_html=True)
+
+        try:
+            import plotly.graph_objects as go
+
+            fig = go.Figure()
+
+            # One trace per exercise with distinct colours
+            colours = ["#4fc3f7", "#81c784", "#ffb74d", "#e57373", "#ce93d8"]
+            ex_list = df_chart["Exercise"].unique().tolist()
+            colour_map = {ex: colours[i % len(colours)] for i, ex in enumerate(ex_list)}
+
+            for ex in ex_list:
+                ex_df = df_chart[df_chart["Exercise"] == ex]
+                fig.add_trace(go.Scatter(
+                    x=ex_df["Rep #"],
+                    y=ex_df["Form Score (%)"],
+                    mode="lines+markers",
+                    name=ex,
+                    line=dict(color=colour_map[ex], width=2.5),
+                    marker=dict(size=8, color=colour_map[ex]),
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "Rep %{x}<br>"
+                        "Form: %{y:.0f}%<extra></extra>"
+                    ),
+                    text=[ex] * len(ex_df),
+                ))
+
+            # Vertical lines at exercise switches
+            ex_changes = [e for e in events if e.get("type") == "exercise_change"]
+            for chg in ex_changes:
+                # Find the rep index just before this change
+                chg_ts = chg.get("timestamp", "")
+                switch_rep_idx = None
+                for j, row in enumerate(chart_rows):
+                    if row["timestamp"] <= chg_ts:
+                        switch_rep_idx = row["Rep #"]
+                if switch_rep_idx is not None:
+                    fig.add_vline(
+                        x=switch_rep_idx + 0.5,
+                        line_dash="dash",
+                        line_color="#ffb74d",
+                        annotation_text=f"→ {chg.get('to_exercise','?')}",
+                        annotation_font_color="#ffb74d",
+                        annotation_position="top right",
+                    )
+
+            # Threshold line at 80%
+            fig.add_hline(
+                y=80,
+                line_dash="dot",
+                line_color="#e57373",
+                annotation_text="80% threshold",
+                annotation_font_color="#e57373",
+                annotation_position="bottom right",
+            )
+
+            fig.update_layout(
+                plot_bgcolor="#0d1117",
+                paper_bgcolor="#0d1117",
+                font_color="#c9d1d9",
+                xaxis=dict(
+                    title="Rep Number",
+                    gridcolor="#21262d",
+                    tickmode="linear",
+                    tick0=1,
+                    dtick=1,
+                ),
+                yaxis=dict(
+                    title="Form Score (%)",
+                    gridcolor="#21262d",
+                    range=[50, 105],
+                ),
+                legend=dict(
+                    bgcolor="rgba(0,0,0,0)",
+                    bordercolor="#21262d",
+                ),
+                margin=dict(l=40, r=20, t=20, b=40),
+                height=320,
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        except ImportError:
+            # Fallback to Streamlit's built-in line chart if plotly not available
+            st.line_chart(df_chart.set_index("Rep #")[["Form Score (%)"]])
+
+        # ── ROM chart ─────────────────────────────────────────────────────────
+        st.markdown('<div class="pts-section-title">📐 ROM by Rep</div>', unsafe_allow_html=True)
+        try:
+            fig2 = go.Figure()
+            for ex in ex_list:
+                ex_df = df_chart[df_chart["Exercise"] == ex]
+                fig2.add_trace(go.Bar(
+                    x=ex_df["Rep #"],
+                    y=ex_df["ROM (°)"],
+                    name=ex,
+                    marker_color=colour_map[ex],
+                    opacity=0.85,
+                ))
+            avg_rom = metrics.get("avg_rom", 0)
+            fig2.add_hline(
+                y=avg_rom,
+                line_dash="dot",
+                line_color="#ffffff",
+                annotation_text=f"avg {avg_rom:.1f}°",
+                annotation_font_color="#ffffff",
+                annotation_position="top right",
+            )
+            fig2.update_layout(
+                plot_bgcolor="#0d1117",
+                paper_bgcolor="#0d1117",
+                font_color="#c9d1d9",
+                barmode="overlay",
+                xaxis=dict(title="Rep Number", gridcolor="#21262d", tickmode="linear", tick0=1, dtick=1),
+                yaxis=dict(title="ROM (°)", gridcolor="#21262d"),
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                margin=dict(l=40, r=20, t=10, b=40),
+                height=260,
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+        except Exception:
+            st.bar_chart(df_chart.set_index("Rep #")[["ROM (°)"]])
+
+        # ── Rep-by-rep table ──────────────────────────────────────────────────
+        st.markdown('<div class="pts-section-title">📋 Rep-by-Rep Breakdown</div>', unsafe_allow_html=True)
+
+        display_df = df_chart[["Rep #", "Exercise", "Form Score (%)", "ROM (°)", "Duration (s)"]].copy()
+
+        def _color_form(val):
+            if val >= 90:
+                return "background-color: #1b3a1b; color: #81c784"
+            elif val >= 80:
+                return "background-color: #1b2d1b; color: #a5d6a7"
+            elif val >= 70:
+                return "background-color: #3a2e10; color: #ffcc80"
+            else:
+                return "background-color: #3a1010; color: #ef9a9a"
+
+        styled = display_df.style.applymap(_color_form, subset=["Form Score (%)"])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # ── Summary text (collapsible) ────────────────────────────────────────────
+    with st.expander("📝 Full Summary Text", expanded=False):
+        st.text(summary.get("summary_text", ""))
+
+
+# =============================================================================
+# PAGE: OBSERVATION LOGS (structured per-rep event logs)
+# =============================================================================
+
+def page_observation_logs():
+    """Render the Observation Logs page — structured per-rep event viewer."""
+
+    # ---- CSS for cards ----
+    st.markdown("""
+    <style>
+    .obs-card {
+        background: linear-gradient(135deg, #1a1f36 0%, #1e2540 100%);
+        border: 1px solid #2d3561;
+        border-radius: 12px;
+        padding: 1.1rem 1.3rem;
+        margin-bottom: 0.6rem;
+    }
+    .obs-card-title {
+        font-size: 0.75rem;
+        color: #8892b0;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.2rem;
+    }
+    .obs-card-value {
+        font-size: 1.7rem;
+        font-weight: 700;
+        color: #64ffda;
+    }
+    .obs-card-sub {
+        font-size: 0.8rem;
+        color: #a8b2d8;
+        margin-top: 0.1rem;
+    }
+    .event-row-rep { border-left: 4px solid #64ffda; padding-left: 0.7rem; margin: 0.3rem 0; }
+    .event-row-switch { border-left: 4px solid #ffb347; padding-left: 0.7rem; margin: 0.3rem 0; }
+    .event-row-reset { border-left: 4px solid #ff6b6b; padding-left: 0.7rem; margin: 0.3rem 0; }
+    .event-row-start { border-left: 4px solid #79c0ff; padding-left: 0.7rem; margin: 0.3rem 0; }
+    .event-row-end { border-left: 4px solid #c9d1d9; padding-left: 0.7rem; margin: 0.3rem 0; }
+    .badge-video { background:#1f6feb; color:#e6edf3; border-radius:4px; padding:2px 8px; font-size:0.72rem; font-weight:600; }
+    .badge-webcam { background:#388bfd20; color:#79c0ff; border: 1px solid #388bfd; border-radius:4px; padding:2px 8px; font-size:0.72rem; font-weight:600; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("## 🔬 Observation Logs")
+    st.markdown("*Structured per-rep event logs generated automatically during analysis*")
+
+    # Discover log files
+    log_files = list_observation_logs()
+
+    if not log_files:
+        st.info(
+            "No observation logs found yet. Run a video or webcam analysis session to generate logs.\n\n"
+            "**Command line:** `python analyze.py video --input videos/Squats.demo.video.mp4 --exercise squat`"
+        )
+        return
+
+    # ---- File selector (sidebar column) ----
+    col_sidebar, col_main = st.columns([1, 3])
+
+    with col_sidebar:
+        st.markdown("### Sessions")
+
+        file_labels = []
+        for f in log_files:
+            try:
+                d = load_observation_log(str(f))
+                ex = d.get("initial_exercise", "Unknown")
+                ts = d.get("start_time", "")[:16].replace("T", " ")
+                src = d.get("source", "video")
+                reps = d.get("summary", {}).get("total_reps", "?")
+                label = f"{ts}\n{ex} · {reps} reps · {src}"
+            except Exception:
+                label = f.stem
+            file_labels.append(label)
+
+        selected_idx = st.radio(
+            "Select session",
+            range(len(log_files)),
+            format_func=lambda i: file_labels[i],
+            label_visibility="collapsed",
+        )
+
+        selected_file = log_files[selected_idx]
+
+    with col_main:
+        try:
+            data = load_observation_log(str(selected_file))
+        except Exception as e:
+            st.error(f"Could not load log file: {e}")
+            return
+
+        summary = data.get("summary", {})
+        events = data.get("events", [])
+        source = data.get("source", "video")
+        start_ts = data.get("start_time", "")[:19].replace("T", " ")
+        duration_s = data.get("duration_seconds") or 0
+        duration_str = f"{int(duration_s // 60)}m {int(duration_s % 60)}s" if duration_s else "N/A"
+
+        badge_html = (
+            '<span class="badge-video">📹 Video</span>'
+            if source == "video"
+            else '<span class="badge-webcam">🎥 Webcam</span>'
+        )
+
+        st.markdown(
+            f"**{data.get('initial_exercise','Unknown')}** &nbsp;{badge_html}&nbsp;"
+            f"<span style='color:#8892b0;font-size:0.85rem'>{start_ts} &middot; {duration_str}</span>",
+            unsafe_allow_html=True,
+        )
+
+        # ---- Summary metrics row ----
+        total_reps = summary.get("total_reps", 0)
+        target_reps = data.get("target_reps", 10)
+        avg_form = summary.get("avg_form_score", 0)
+        avg_rom = summary.get("avg_rom", 0)
+        completion = round(total_reps / target_reps * 100) if target_reps else 0
+        form_color = "#64ffda" if avg_form >= 80 else ("#ffb347" if avg_form >= 60 else "#ff6b6b")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Reps Completed", f"{total_reps} / {target_reps}", f"{completion}%")
+        c2.metric("Avg Form Score", f"{avg_form:.1f}%")
+        c3.metric("Avg ROM", f"{avg_rom:.1f}°")
+        c4.metric("Total Events", len(events))
+
+        st.markdown("---")
+
+        # ---- Build rep DataFrame ----
+        rep_events = [e for e in events if e.get("type") == "rep"]
+
+        if rep_events:
+            tab1, tab2, tab3 = st.tabs(["📊 Charts", "📋 Rep Table", "🗂 Event Timeline"])
+
+            with tab1:
+                df_reps = pd.DataFrame(rep_events)
+
+                chart_col1, chart_col2 = st.columns(2)
+
+                with chart_col1:
+                    st.markdown("#### Form Score per Rep")
+                    chart_df = df_reps.set_index("rep_number")[["form_score"]]
+                    st.bar_chart(chart_df, color="#64ffda", height=220)
+
+                with chart_col2:
+                    st.markdown("#### Range of Motion per Rep")
+                    chart_df2 = df_reps.set_index("rep_number")[["rom"]]
+                    st.bar_chart(chart_df2, color="#79c0ff", height=220)
+
+                st.markdown("#### Rep Duration (seconds)")
+                dur_df = df_reps.set_index("rep_number")[["duration_seconds"]]
+                st.line_chart(dur_df, color="#ffb347", height=180)
+
+                # Angle range visualization
+                st.markdown("#### Joint Angle Range per Rep")
+                angle_df = df_reps[["rep_number", "min_angle", "max_angle"]].set_index("rep_number")
+                st.area_chart(angle_df, height=180)
+
+            with tab2:
+                st.markdown("#### Rep-by-Rep Breakdown")
+                display_cols = {
+                    "rep_number": "Rep",
+                    "exercise": "Exercise",
+                    "min_angle": "Min °",
+                    "max_angle": "Max °",
+                    "rom": "ROM °",
+                    "duration_seconds": "Duration (s)",
+                    "form_score": "Form %",
+                }
+                available = [c for c in display_cols if c in df_reps.columns]
+                renamed = df_reps[available].rename(columns=display_cols)
+
+                # Color-code form score
+                def color_form(val):
+                    if isinstance(val, (int, float)):
+                        if val >= 80:
+                            return "color: #64ffda"
+                        elif val >= 60:
+                            return "color: #ffb347"
+                        else:
+                            return "color: #ff6b6b"
+                    return ""
+
+                styled = renamed.style.applymap(color_form, subset=["Form %"])
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+
+                # Download
+                csv_data = df_reps.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Rep Data (CSV)",
+                    csv_data,
+                    file_name=f"{selected_file.stem}_reps.csv",
+                    mime="text/csv",
+                )
+
+            with tab3:
+                st.markdown("#### Full Event Timeline")
+
+                event_type_map = {
+                    "session_start": ("🟦", "SESSION START", "event-row-start"),
+                    "rep":           ("🟢", "REP COMPLETE", "event-row-rep"),
+                    "exercise_change": ("🟡", "EXERCISE SWITCH", "event-row-switch"),
+                    "reset":         ("🔴", "RESET", "event-row-reset"),
+                    "session_end":   ("⬜", "SESSION END", "event-row-end"),
+                }
+
+                for evt in events:
+                    etype = evt.get("type", "")
+                    icon, label, css_class = event_type_map.get(etype, ("⚪", etype.upper(), "event-row-start"))
+                    ts = evt.get("timestamp", "")[:19].replace("T", " ")
+
+                    if etype == "rep":
+                        detail = (
+                            f"**Rep {evt.get('rep_number')}** — {evt.get('exercise')} | "
+                            f"ROM {evt.get('rom')}° | Form {evt.get('form_score')}% | "
+                            f"{evt.get('duration_seconds')}s"
+                        )
+                    elif etype == "exercise_change":
+                        detail = (
+                            f"**{evt.get('from_exercise')}** → **{evt.get('to_exercise')}**"
+                        )
+                    elif etype == "reset":
+                        detail = (
+                            f"Reset during **{evt.get('exercise')}** at rep {evt.get('rep_count_at_reset')}"
+                        )
+                    elif etype == "session_start":
+                        detail = (
+                            f"Started **{evt.get('exercise')}** · Target {evt.get('target_reps')} reps"
+                        )
+                    elif etype == "session_end":
+                        detail = (
+                            f"Total {evt.get('total_reps')} reps · "
+                            f"Avg Form {evt.get('avg_form_score')}% · "
+                            f"Avg ROM {evt.get('avg_rom')}° · "
+                            f"Duration {evt.get('duration_seconds')}s"
+                        )
+                    else:
+                        detail = str(evt)
+
+                    st.markdown(
+                        f'<div class="{css_class}">'
+                        f"<span style='color:#8892b0;font-size:0.78rem'>{ts}</span> &nbsp; "
+                        f"{icon} **{label}** — {detail}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+        else:
+            st.info("No rep events recorded in this session.")
+
+        # ---- Warnings ----
+        warnings = summary.get("warnings", [])
+        if warnings:
+            st.markdown("---")
+            st.markdown("#### ⚠️ Session Warnings")
+            for w in warnings:
+                st.warning(w)
+
+        # ---- Exercise breakdown (multi-exercise sessions) ----
+        ex_performed = summary.get("exercises_performed", [])
+        if len(ex_performed) > 1:
+            st.markdown("---")
+            st.markdown("#### Exercise Breakdown")
+            ex_df = pd.DataFrame(ex_performed)
+            ex_df.columns = ["Exercise", "Reps", "Avg Form %", "Avg ROM °"]
+            st.dataframe(ex_df, use_container_width=True, hide_index=True)
+
+        # ---- Download full log ----
+        st.markdown("---")
+        raw_json = json.dumps(data, indent=2)
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "📄 Download Full Log (JSON)",
+                raw_json,
+                file_name=selected_file.name,
+                mime="application/json",
+            )
+        with dl2:
+            st.caption(f"📁 `observation_logs/{selected_file.name}`")
+
+
+# =============================================================================
+# PAGE: SESSION LOG ANALYSIS
+# =============================================================================
+
+def page_session_logs():
+    """Render the session log analysis page."""
+    import pandas as pd
+
+    st.markdown("## 📋 Session Log Analysis")
+
+    sessions_dir = Path(__file__).parent.parent / "sessions"
+    json_files = sorted(sessions_dir.glob("*.json"), reverse=True)
+
+    if not json_files:
+        st.info("No session logs found. Complete a webcam or video session first to generate logs.")
+        return
+
+    # Session selector
+    file_names = [f.name for f in json_files]
+    selected_name = st.selectbox("Select Session", file_names)
+    selected_path = sessions_dir / selected_name
+
+    with open(selected_path) as f:
+        data = json.load(f)
+
+    summary = data.get("session_summary", {})
+    rep_details = data.get("rep_details", [])
+    recommendations = data.get("recommendations", [])
+    warnings = data.get("warnings", [])
+
+    # Summary header
+    st.markdown(f"**Exercise:** {summary.get('exercise', 'Unknown')}  |  "
+                f"**Date:** {summary.get('start_time', '')[:19].replace('T', ' ')}")
+
+    st.markdown("### Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    completion = summary.get('completion_rate', 0)
+    with col1:
+        st.metric("Reps Completed",
+                  f"{summary.get('total_reps', 0)}/{summary.get('target_reps', 0)}",
+                  f"{completion:.0f}%")
+    with col2:
+        st.metric("Avg Form Score", f"{summary.get('avg_form_score', 0):.1f}%")
+    with col3:
+        st.metric("Avg ROM", f"{summary.get('avg_range_of_motion', 0):.1f}°")
+    with col4:
+        st.metric("Tempo Consistency σ", f"{summary.get('tempo_consistency_std', 0):.2f}s")
+
+    st.markdown("---")
+
+    if rep_details:
+        df = pd.DataFrame(rep_details)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### ROM per Rep")
+            chart_data = df.set_index("rep_number")[["rom"]]
+            st.bar_chart(chart_data)
+
+        with col2:
+            st.markdown("### Form Score per Rep")
+            chart_data = df.set_index("rep_number")[["form_score"]]
+            st.line_chart(chart_data)
+
+        st.markdown("### Angle Range per Rep")
+        angle_df = df[["rep_number", "min_angle", "max_angle"]].set_index("rep_number")
+        st.area_chart(angle_df)
+
+        st.markdown("### Rep Details")
+        display_df = df[["rep_number", "min_angle", "max_angle", "rom", "duration_seconds", "form_score"]].rename(columns={
+            "rep_number": "Rep", "min_angle": "Min °", "max_angle": "Max °",
+            "rom": "ROM °", "duration_seconds": "Duration (s)", "form_score": "Form %"
+        })
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.info("No rep data recorded in this session.")
+
+    # Recommendations
+    if recommendations:
+        st.markdown("### Recommendations")
+        for rec in recommendations:
+            st.info(f"💡 {rec}")
+
+    if warnings:
+        st.markdown("### Warnings")
+        for w in warnings:
+            st.warning(f"⚠️ {w}")
+
+    # Download
+    st.markdown("---")
+    with open(selected_path) as f:
+        raw_json = f.read()
+    st.download_button("📄 Download Session JSON", raw_json,
+                       file_name=selected_name, mime="application/json")
+
+    # Raw text logs viewer
+    st.markdown("---")
+    st.markdown("### 📝 Raw Session Logs")
+    logs_dir = Path(__file__).parent.parent / "logs"
+    log_files = sorted(logs_dir.glob("logfile-*.log"), reverse=True) if logs_dir.exists() else []
+
+    if log_files:
+        log_names = [f.name for f in log_files]
+        selected_log = st.selectbox("Select Log File", log_names, key="log_select")
+        log_path = logs_dir / selected_log
+        with open(log_path) as lf:
+            log_content = lf.read()
+        lines = log_content.strip().splitlines()
+        st.caption(f"{len(lines)} lines  ·  {log_path.name}")
+        st.code(log_content, language=None)
+        st.download_button("📄 Download Log File", log_content,
+                           file_name=selected_log, mime="text/plain")
+    else:
+        st.info("No log files found yet. Run a webcam session to generate logs.")
 
 
 # =============================================================================
@@ -958,6 +1792,12 @@ def main():
         page_live_session()
     elif page == 'video':
         page_video_analysis()
+    elif page == 'pt_summary':
+        page_pt_summary()
+    elif page == 'obs_logs':
+        page_observation_logs()
+    elif page == 'logs':
+        page_session_logs()
     elif page == 'progress':
         page_progress_report()
     elif page == 'learn':

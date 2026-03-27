@@ -67,16 +67,16 @@ def good_form_keypoints():
 
 @pytest.fixture
 def bad_form_keypoints():
-    """Keypoints representing poor form - hip lifting and trunk lean."""
+    """Keypoints representing poor form - uneven shoulders, hip hiking, trunk lean."""
     keypoints = np.zeros((17, 3))
 
-    # Upper body leaning (shoulders shifted forward)
-    keypoints[5] = [160, 100, 0.95]  # Left shoulder (shifted forward)
-    keypoints[6] = [220, 100, 0.95]  # Right shoulder
+    # Upper body leaning with uneven shoulders
+    keypoints[5] = [160, 80, 0.95]   # Left shoulder (higher)
+    keypoints[6] = [220, 140, 0.95]  # Right shoulder (lower, 60px difference)
 
     # Hips uneven (hip hiking)
-    keypoints[11] = [130, 260, 0.95]  # Left hip (raised)
-    keypoints[12] = [170, 290, 0.95]  # Right hip (lower)
+    keypoints[11] = [130, 240, 0.95]  # Left hip (raised significantly)
+    keypoints[12] = [170, 300, 0.95]  # Right hip (lower, 60px difference)
 
     # Knees
     keypoints[13] = [130, 400, 0.9]
@@ -87,7 +87,7 @@ def bad_form_keypoints():
     keypoints[16] = [170, 520, 0.85]
 
     # Head (shoulder shrugging - ear close to shoulder)
-    keypoints[3] = [130, 110, 0.9]  # Left ear (close to shoulder)
+    keypoints[3] = [130, 90, 0.9]  # Left ear (close to shoulder)
 
     return keypoints
 

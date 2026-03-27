@@ -282,16 +282,16 @@ class FormAnalyzer:
         # Check shoulder level
         shoulder_level = get_shoulder_level_angle(keypoints)
         if shoulder_level is not None:
-            if abs(shoulder_level - 90) > 10:  # More than 10° from horizontal
-                deviation = abs(shoulder_level - 90)
+            if abs(shoulder_level) > 10:  # More than 10° from horizontal
+                deviation = abs(shoulder_level)
                 issues.append(f"Shoulders uneven by {deviation:.0f}°")
                 score -= min(deviation, 20)
 
         # Check hip level
         hip_level = get_hip_level_angle(keypoints)
         if hip_level is not None:
-            if abs(hip_level - 90) > 8:  # More than 8° from horizontal
-                deviation = abs(hip_level - 90)
+            if abs(hip_level) > 8:  # More than 8° from horizontal
+                deviation = abs(hip_level)
                 issues.append(f"Hips uneven by {deviation:.0f}°")
                 score -= min(deviation, 20)
 
@@ -841,9 +841,9 @@ class FormAnalyzer:
 
         if all(p is not None for p in [left_knee, left_ankle, right_knee, right_ankle]):
             # Left knee should be at or outside left ankle in X
-            left_valgus = left_ankle[0] - left_knee[0]  # Positive = knee inside ankle
+            left_valgus = left_knee[0] - left_ankle[0]  # Positive = knee inside ankle
             # Right knee should be at or outside right ankle
-            right_valgus = right_knee[0] - right_ankle[0]  # Positive = knee inside ankle
+            right_valgus = right_ankle[0] - right_knee[0]  # Positive = knee inside ankle
 
             max_valgus = max(left_valgus, right_valgus)
 

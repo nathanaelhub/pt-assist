@@ -1040,23 +1040,23 @@ def main(video_path: str, exercise_name: str = "knee_extension",
             writer.release()
         cv2.destroyAllWindows()
 
-    # Finalize session
-    session = tracker.finalize_session()
-
-    # Write observation log summary
-    obs_logger.end_session(
-        total_reps=session.total_reps,
-        avg_form_score=session.avg_form_score,
-        avg_rom=session.avg_rom,
-        warnings=session.warnings,
-    )
-
-    # Write raw PTA log summary
-    pta_logger.end_session(
-        total_reps=session.total_reps,
-        avg_form_score=session.avg_form_score,
-        avg_rom=session.avg_rom,
-    )
+        # Finalize session and close loggers — must run even on exception
+        try:
+            session = tracker.finalize_session()
+            obs_logger.end_session(
+                total_reps=session.total_reps,
+                avg_form_score=session.avg_form_score,
+                avg_rom=session.avg_rom,
+                warnings=session.warnings,
+            )
+            pta_logger.end_session(
+                total_reps=session.total_reps,
+                avg_form_score=session.avg_form_score,
+                avg_rom=session.avg_rom,
+            )
+        except Exception as e:
+            print(f"Warning: session finalization error: {e}")
+            session = tracker.session
 
     print(f"\n\n{'='*60}")
     print("Session Complete!")
@@ -1427,25 +1427,32 @@ def analyze_webcam(exercise_name: str = "knee_extension",
                 tracker._record_partial_rep("interrupted")
                 if len(tracker.session.partial_rep_metrics) > prev_partial_count:
                     p = tracker.session.partial_rep_metrics[-1]
-                    obs_logger.log_partial_rep(
-                        exercise=p.exercise, rom=p.rom,
-                        min_angle=p.min_angle, max_angle=p.max_angle,
-                        duration_seconds=p.duration_seconds, reason=p.reason,
-                    )
-                    pta_logger.log_partial_rep(p.exercise, p.rom, p.reason)
+                    try:
+                        obs_logger.log_partial_rep(
+                            exercise=p.exercise, rom=p.rom,
+                            min_angle=p.min_angle, max_angle=p.max_angle,
+                            duration_seconds=p.duration_seconds, reason=p.reason,
+                        )
+                        pta_logger.log_partial_rep(p.exercise, p.rom, p.reason)
+                    except Exception as log_err:
+                        print(f"Warning: failed to log partial rep: {log_err}")
                 # Switch to next exercise
                 prev_name = exercise_config.name
                 current_exercise_idx = (current_exercise_idx + 1) % len(exercise_names)
                 exercise_config = exercises[exercise_names[current_exercise_idx]]
-                obs_logger.log_exercise_change(prev_name, exercise_config.name)
-                pta_logger.log_exercise_change(prev_name, exercise_config.name)
-                logger.log(f"SWITCH | {prev_name} → {exercise_config.name}")
+                try:
+                    obs_logger.log_exercise_change(prev_name, exercise_config.name)
+                    pta_logger.log_exercise_change(prev_name, exercise_config.name)
+                    logger.log(f"SWITCH | {prev_name} -> {exercise_config.name}")
+                except Exception as log_err:
+                    print(f"Warning: failed to log exercise change: {log_err}")
                 tracker = ExerciseTracker(exercise_config, fps)
                 base_exercise = exercise_names[current_exercise_idx].replace('_right', '').replace('_left', '')
                 form_analyzer = FormAnalyzer(base_exercise)
                 last_keypoints = None
                 last_angle = None
                 last_assessment = None
+                last_form_log_frame = -999
                 prev_rep_count = 0
                 prev_partial_count = 0
                 print(f"Switched to: {exercise_config.name}")
@@ -1462,23 +1469,30 @@ def analyze_webcam(exercise_name: str = "knee_extension",
             writer.release()
         cv2.destroyAllWindows()
 
-    session = tracker.finalize_session()
-    logger.close(
-        f"Total Reps: {session.total_reps} | "
-        f"Avg Form: {session.avg_form_score:.0f}% | "
-        f"Avg ROM: {session.avg_rom:.1f}°"
-    )
-    obs_logger.end_session(
-        total_reps=session.total_reps,
-        avg_form_score=session.avg_form_score,
-        avg_rom=session.avg_rom,
-        warnings=session.warnings,
-    )
-    pta_logger.end_session(
-        total_reps=session.total_reps,
-        avg_form_score=session.avg_form_score,
-        avg_rom=session.avg_rom,
-    )
+        # Finalize session and close all loggers — must run even if the
+        # loop exited via an exception so log files are left in a valid state.
+        try:
+            session = tracker.finalize_session()
+            logger.close(
+                f"Total Reps: {session.total_reps} | "
+                f"Avg Form: {session.avg_form_score:.0f}% | "
+                f"Avg ROM: {session.avg_rom:.1f}°"
+            )
+            obs_logger.end_session(
+                total_reps=session.total_reps,
+                avg_form_score=session.avg_form_score,
+                avg_rom=session.avg_rom,
+                warnings=session.warnings,
+            )
+            pta_logger.end_session(
+                total_reps=session.total_reps,
+                avg_form_score=session.avg_form_score,
+                avg_rom=session.avg_rom,
+            )
+        except Exception as e:
+            print(f"Warning: session finalization error: {e}")
+            session = tracker.session
+
     return session
 
 

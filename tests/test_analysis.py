@@ -461,7 +461,7 @@ class TestIntegration:
 
         # Standing position should have nearly straight legs
         assert angle is not None
-        assert 160 < angle < 180, f"Standing leg angle should be ~180°, got {angle}°"
+        assert 160 < angle <= 180, f"Standing leg angle should be ~180°, got {angle}°"
 
     def test_multiple_angle_calculations(self, standing_pose_keypoints):
         """Test calculating multiple angles from same keypoints."""

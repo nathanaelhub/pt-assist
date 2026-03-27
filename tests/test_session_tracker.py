@@ -175,6 +175,9 @@ class TestSessionLifecycle:
         """Test ending a session."""
         session_tracker.start_session()
         session_tracker.add_exercise_record(sample_exercise_record)
+        # Backdate start_time by 1 minute so duration calculation is non-zero
+        start = datetime.now() - timedelta(minutes=1)
+        session_tracker.current_session.start_time = start.strftime('%H:%M:%S')
         session_tracker.end_session(therapist_notes="Good progress today")
 
         assert session_tracker.current_session.end_time != ""

@@ -119,7 +119,7 @@ class PTARawLogger:
             "************",
         ]
 
-        with open(self.file_path, "w") as f:
+        with open(self.file_path, "w", encoding="utf-8") as f:
             f.write("\n".join(header_lines) + "\n")
 
         self._started = True
@@ -305,5 +305,5 @@ class PTARawLogger:
             parts.append(f" {data}")
 
         line = " |".join(parts)
-        with open(self.file_path, "a") as f:
+        with open(self.file_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")

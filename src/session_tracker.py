@@ -149,7 +149,7 @@ class SessionTracker:
 
         for filepath in session_files:
             try:
-                with open(filepath, 'r') as f:
+                with open(filepath, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     session = self._dict_to_session(data)
                     self.session_history.append(session)
@@ -308,7 +308,7 @@ class SessionTracker:
             'metadata': self.current_session.metadata
         }
 
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
 
         return filepath
@@ -317,7 +317,7 @@ class SessionTracker:
         """Save session as CSV file."""
         filepath = self.data_dir / f"{self.current_session.session_id}.csv"
 
-        with open(filepath, 'w', newline='') as f:
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
 
             # Header section
@@ -736,7 +736,7 @@ class SessionTracker:
 
     def _export_history_csv(self, filepath: Path):
         """Export all sessions to a single CSV."""
-        with open(filepath, 'w', newline='') as f:
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
 
             # Header
@@ -783,7 +783,7 @@ class SessionTracker:
             }
             data["sessions"].append(session_data)
 
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
 
 

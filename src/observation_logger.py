@@ -388,7 +388,7 @@ class ObservationLogger:
         """Write the current session_data dict to the JSON log file."""
         if self.file_path is None:
             return
-        with open(self.file_path, "w") as f:
+        with open(self.file_path, "w", encoding="utf-8") as f:
             json.dump(self.session_data, f, indent=2)
 
 
@@ -428,5 +428,5 @@ def load_observation_log(file_path: str) -> Dict[str, Any]:
     Returns:
         Parsed log data dictionary.
     """
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)

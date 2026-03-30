@@ -89,6 +89,15 @@ streamlit run interfaces/app.py
 
 **Pre-built Programs:** `knee_rehab`, `shoulder_mobility`, `hip_strengthening`, `general_conditioning`
 
+## Running the Tests
+
+```bash
+pytest tests/ -v
+```
+
+Covers angle math, the rep-counting state machine, form assessment, and
+log serialization (`tests/fixtures/` has sample keypoint data).
+
 ## Project Structure
 
 ```

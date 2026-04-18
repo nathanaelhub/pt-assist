@@ -1715,6 +1715,7 @@ Examples:
     video_parser.add_argument("--model", "-m", default="models/yolo11m-pose.pt", help="YOLO model")
     video_parser.add_argument("--no-display", action="store_true", help="Don't show video")
     video_parser.add_argument("--report", "-r", nargs="*", default=["json", "csv"],
+                              choices=["json", "csv"],
                               help="Report formats (json, csv)")
 
     # Webcam mode

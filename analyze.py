@@ -1700,6 +1700,9 @@ Examples:
 
   # Use AIGym for pushups
   python analyze.py aigym --input workout.mp4 --type pushup
+
+  # Faster webcam on older machines: infer every 2nd frame at 320px
+  python analyze.py webcam --exercise squat --skip-frames 2 --imgsz 320
         """
     )
 

@@ -250,7 +250,7 @@ class SessionLogger:
         return self.log_dir / "logfile-overflow.log"
 
     def _write_raw(self, text: str):
-        with open(self.file_path, 'a') as f:
+        with open(self.file_path, 'a', encoding='utf-8') as f:
             f.write(text)
         self.line_count += 1
 
@@ -794,7 +794,7 @@ def load_config(config_path: str = "config.yaml") -> Dict[str, ExerciseConfig]:
         print("Using default configurations...")
         return get_default_configs()
 
-    with open(config_file, 'r') as f:
+    with open(config_file, 'r', encoding='utf-8') as f:
         config_data = yaml.safe_load(f)
 
     exercises = {}
@@ -1558,7 +1558,7 @@ def generate_session_report(session: ExerciseSession,
             "warnings": session.warnings
         }
 
-        with open(json_path, 'w') as f:
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2)
 
         output_files["json"] = str(json_path)
@@ -1567,7 +1567,7 @@ def generate_session_report(session: ExerciseSession,
     if "csv" in formats:
         csv_path = output_dir / f"{base_name}.csv"
 
-        with open(csv_path, 'w', newline='') as f:
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
 
             # Header with session info

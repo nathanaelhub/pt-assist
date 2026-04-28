@@ -67,6 +67,10 @@ python analyze.py webcam --exercise squat --camera 2
 streamlit run interfaces/app.py
 ```
 
+**Performance tip:** on older machines run `webcam` with
+`--skip-frames 2 --imgsz 320` — YOLO infers every other frame at a
+smaller size, which roughly doubles FPS for a small accuracy cost.
+
 **Webcam Controls:**
 - `q` - Quit
 - `r` - Reset rep count
